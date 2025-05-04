@@ -53,6 +53,7 @@ if __name__ == "__main__":
     ############################
     # BRONZE
     ############################
+    print("Building bronze tables...")
     # Create bronze datalake
     bronze_directory = "datamart/bronze"
 
@@ -75,6 +76,7 @@ if __name__ == "__main__":
     ############################
     # SILVER
     ############################
+    print("Building silver tables...")
     # Create silver datalake
     silver_directory = "datamart/silver"
 
@@ -97,6 +99,7 @@ if __name__ == "__main__":
     ############################
     # GOLD
     ############################
+    print("Building gold tables...")
     # Create gold datalake
     gold_directory = "datamart/gold"
 
