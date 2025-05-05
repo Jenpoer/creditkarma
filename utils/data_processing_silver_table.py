@@ -133,7 +133,7 @@ def process_df_financials(df, silver_db, snapshot_date_str):
     df = df.withColumn("credit_history_age_month", col("credit_history_age_month").cast(IntegerType()))
 
     # Remove negative values from columns that should not have it
-    for column_name in ['num_of_loan', 'delay_from_due_date', 'num_of_delayed_payment', 'changed_credit_limit']:
+    for column_name in ['num_of_loan', 'delay_from_due_date', 'num_of_delayed_payment']:
         df = df.withColumn(
             column_name,
             F.when(col(column_name) >= 0, col(column_name))  # keep valid
