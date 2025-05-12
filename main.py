@@ -107,18 +107,11 @@ if __name__ == "__main__":
         os.makedirs(gold_directory)
 
     # Build gold tables
-    X_train, y_train, X_test, y_test = process_gold_table(silver_directory, gold_directory, dates_str_lst, spark)
+    X, y = process_gold_table(silver_directory, gold_directory, dates_str_lst, spark)
 
-    print("X_train: ")
-    X_train.show(5)
+    print("X: ")
+    X.show(5)
 
-    print("y_train: ")
-    y_train.show(5)
-
-    print("X_test: ")
-    X_test.show(5)
-
-    print("y_test: ")
-    y_test.show(5)
-
+    print("y: ")
+    y.show(5)
     

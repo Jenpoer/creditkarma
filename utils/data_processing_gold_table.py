@@ -22,15 +22,10 @@ def read_silver_table(table, silver_db, spark):
 ############################
 # Label Store
 ############################
-def build_label_store(mob, dpd, silver_db, gold_db, partitions_list, spark, train_ratio=0.8, seed=42):
+def build_label_store(mob, dpd, df):
     """
-    Functiion to build label store
+    Function to build label store
     """
-    label_table = 'lms' # hard coded
-
-    # Connect to silver table, read all partitions
-    df = read_silver_table(label_table, silver_db, spark)
-
     ####################
     # Create labels
     ####################
@@ -45,34 +40,7 @@ def build_label_store(mob, dpd, silver_db, gold_db, partitions_list, spark, trai
     # select columns to save
     df = df.select("loan_id", "customer_id", "label", "label_def", "snapshot_date")
 
-    #####################
-    # Do train test split
-    #####################
-    label_counts = df.groupBy("label").count().collect()
-    fractions = {row["label"]: train_ratio for row in label_counts}
-
-    df_train = df.stat.sampleBy("label", fractions=fractions, seed=42)
-    df_test = df.join(df_train, on=df.columns, how="left_anti")
-
-
-    ######################
-    # save gold table - IRL connect to database to write
-    ###################### 
-
-    # Partition and save train data
-    for date_str in tqdm(partitions_list, total=len(partitions_list), desc="Saving train labels"):
-        partition_name = date_str.replace('-','_') + '.parquet'
-        train_filepath = os.path.join(gold_db, 'label_store', 'train', partition_name)
-        df_train.filter(col('snapshot_date')==date_str).write.mode('overwrite').parquet(train_filepath)
-
-    
-    # Partition and save test data
-    for date_str in tqdm(partitions_list, total=len(partitions_list), desc="Saving test labels"):
-        partition_name = date_str.replace('-','_') + '.parquet'
-        test_filepath = os.path.join(gold_db, 'label_store', 'test', partition_name)
-        df_test.filter(col('snapshot_date')==date_str).write.mode('overwrite').parquet(test_filepath)
-    
-    return df_train, df_test
+    return df
 
 ############################
 # Feature Store
@@ -103,10 +71,7 @@ def one_hot_encoder(df, category_col):
     df = df.drop(category_col, f"{category_col}_index", f"{category_col}_ohe", f"{category_col}_array")
     return df
 
-def build_feature_store(df_attributes, df_financials, df_loan_type, df_clickstream, df_label):
-    """
-    Function to build feature store based on the subset (train/test)
-    """
+def build_feature_store(df_attributes, df_financials, df_loan_type, df_clickstream, df_lms, df_label):
     #############
     # Join attributes and financials into a single matrix
     #############
@@ -114,6 +79,10 @@ def build_feature_store(df_attributes, df_financials, df_loan_type, df_clickstre
     df_joined = df_joined.join(df_loan_type, on=["customer_id", "snapshot_date"], how="inner")
     df_joined = df_joined.drop("name", "ssn", "type_of_loan", "credit_history_age", "type_of_loan") # drop identifiers and duplicated columns
     df_joined = df_joined.join(df_label.select("customer_id"), on="customer_id", how="left_semi") # filter by user IDs that have labels
+
+    # Merge credit history age into one column
+    df_joined = df_joined.withColumn("credit_history_age_month", F.col("credit_history_age_year") * 12 + F.col("credit_history_age_month"))
+    df_joined = df_joined.drop("credit_history_age_year")
 
     print("1. Joined dataframes")
 
@@ -142,10 +111,11 @@ def build_feature_store(df_attributes, df_financials, df_loan_type, df_clickstre
     #############
 
     # Filter clickstream data
-    df_label_renamed = df_label.withColumnRenamed("snapshot_date", "mob_date")
-    df_label_renamed = df_label_renamed.select("customer_id", "mob_date")  
-    df_clickstream_filtered = df_clickstream.join(df_label_renamed, on="customer_id", how="inner") # filter by user IDs that have labels
-    df_clickstream_filtered = df_clickstream_filtered.filter(col("snapshot_date") < col("mob_date")) # get clickstream data before the label date
+    df_lms_mob0 = df_lms.filter(col("mob") == 0)
+    df_lms_mob0 = df_lms_mob0.withColumnRenamed("snapshot_date", "mob_date")
+    df_lms_mob0 = df_lms_mob0.select("customer_id", "mob_date")  
+    df_clickstream_filtered = df_clickstream.join(df_lms_mob0, on="customer_id", how="inner") # filter by user IDs that have labels
+    df_clickstream_filtered = df_clickstream_filtered.filter(col("snapshot_date") <= col("mob_date"))
 
     # Do mean aggregation
     agg_exprs = [F.avg(f'fe_{i}').alias(f"avg_fe_{i}") for i in range(1, 21)]
@@ -160,40 +130,6 @@ def build_feature_store(df_attributes, df_financials, df_loan_type, df_clickstre
 
     print("5. Joined clickstream data with the rest of the features")
 
-    #############
-    # Normalize data
-    #############
-    numeric_columns = numeric_columns + [f"avg_fe_{i}" for i in range(1, 21)]
-
-    # Create vector column
-    assembler = VectorAssembler(
-        inputCols=numeric_columns,
-        outputCol="features"
-    )
-    df_vector = assembler.transform(df_joined)
-
-    # Scale the vector
-    scaler = StandardScaler(
-        inputCol="features",
-        outputCol="scaled_features",
-        withMean=True,
-        withStd=True
-    )
-    scaler_model = scaler.fit(df_vector)
-    df_joined = scaler_model.transform(df_vector)
-
-    # Convert vector column to array
-    vector_to_array_udf = F.udf(lambda v: v.toArray().tolist(), ArrayType(FloatType()))
-    df_joined = df_joined.withColumn("scaled_features_array", vector_to_array_udf("scaled_features"))
-
-    # Override the columns
-    for i, col_name in enumerate(numeric_columns):
-        df_joined = df_joined.withColumn(col_name, col("scaled_features_array")[i])
-
-    df_joined = df_joined.drop("features", "scaled_features", "scaled_features_array")
-
-    print("6. Normalized data")
-
     return df_joined
 
 ############################
@@ -204,34 +140,31 @@ def process_gold_table(silver_db, gold_db, partitions_list, spark):
     """
     Wrapper function to build all gold tables
     """
-    # Build label store
-    print("Build label store:")
-    df_train_label, df_test_label = build_label_store(6, 30, silver_db, gold_db, partitions_list, spark)
- 
     # Read silver tables
     df_attributes = read_silver_table('attributes', silver_db, spark)
     df_clickstream = read_silver_table('clickstream', silver_db, spark)
     df_financials = read_silver_table('financials', silver_db, spark)
     df_loan_type = read_silver_table('loan_type', silver_db, spark)
+    df_lms = read_silver_table('lms', silver_db, spark)
 
-    # Build train features
-    print("Build train features:")
-    df_train_features = build_feature_store(df_attributes, df_financials, df_loan_type, df_clickstream, df_train_label)
+    # Build label store
+    print("Building label store...")
+    df_label = build_label_store(6, 30, df_lms)
+    
+    # Build features
+    print("Building features...")
+    df_features = build_feature_store(df_attributes, df_financials, df_loan_type, df_clickstream, df_lms, df_label)
 
-    # Build test features
-    print("Build test features:")
-    df_test_features = build_feature_store(df_attributes, df_financials, df_loan_type, df_clickstream, df_test_label)
-
-    # Partition and save train features
-    for date_str in tqdm(partitions_list, total=len(partitions_list), desc="Saving train features"):
+    # Partition and save features
+    for date_str in tqdm(partitions_list, total=len(partitions_list), desc="Saving features"):
         partition_name = date_str.replace('-','_') + '.parquet'
-        train_filepath = os.path.join(gold_db, 'feature_store', 'train', partition_name)
-        df_train_features.filter(col('snapshot_date')==date_str).write.mode('overwrite').parquet(train_filepath)
+        feature_filepath = os.path.join(gold_db, 'feature_store', partition_name)
+        df_features.filter(col('snapshot_date')==date_str).write.mode('overwrite').parquet(feature_filepath)
 
-    # Partition and save test data
-    for date_str in tqdm(partitions_list, total=len(partitions_list), desc="Saving test features"):
+    # Partition and save labels
+    for date_str in tqdm(partitions_list, total=len(partitions_list), desc="Saving labels"):
         partition_name = date_str.replace('-','_') + '.parquet'
-        test_filepath = os.path.join(gold_db, 'feature_store', 'test', partition_name)
-        df_test_features.filter(col('snapshot_date')==date_str).write.mode('overwrite').parquet(test_filepath)
+        label_filepath = os.path.join(gold_db, 'label_store', partition_name)
+        df_label.filter(col('snapshot_date')==date_str).write.mode('overwrite').parquet(label_filepath)
 
-    return df_train_features, df_train_label, df_test_features, df_test_label
+    return df_features, df_label
