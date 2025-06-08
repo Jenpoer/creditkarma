@@ -184,3 +184,5 @@ cython_debug/
 data/
 datamart/
 .trunk
+model_bank/
+mlflow.db

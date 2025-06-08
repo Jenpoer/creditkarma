@@ -27,7 +27,6 @@ COPY requirements.txt ./
 # Install Python dependencies (ensure that pyspark is in your requirements.txt,
 # or you can install it explicitly by uncommenting the next line)
 RUN pip install --no-cache-dir -r requirements.txt
-# RUN pip install pyspark
 
 # Expose the default JupyterLab port
 EXPOSE 8888
