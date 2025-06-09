@@ -73,9 +73,9 @@ if __name__ == "__main__":
     for date_str in tqdm(dates_str_lst, total=len(dates_str_lst), desc="Processing lms"):
         process_bronze_table('lms', 'data/lms_loan_daily.csv', bronze_directory, date_str, spark)
 
-    ############################
-    # SILVER
-    ############################
+    # ############################
+    # # SILVER
+    # ############################
     print("Building silver tables...")
     # Create silver datalake
     silver_directory = "datamart/silver"
@@ -107,7 +107,8 @@ if __name__ == "__main__":
         os.makedirs(gold_directory)
 
     # Build gold tables
-    X, y = process_gold_table(silver_directory, gold_directory, dates_str_lst, spark)
+    for date_str in tqdm(dates_str_lst, total=len(dates_str_lst), desc="Processing gold table"):
+        X, y = process_gold_table(silver_directory, gold_directory, date_str, spark)
 
     print("X: ")
     X.show(5)

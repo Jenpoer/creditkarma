@@ -276,3 +276,16 @@ def process_silver_table(table_name, bronze_db, silver_db, snapshot_date_str, sp
     filepath = os.path.join(silver_db, table_name, partition_name)
     df.write.mode("overwrite").parquet(filepath)
     return df
+
+def process_silver_table_main(table_name, silver_db, bronze_db, snapshot_date_str):
+    # Initialize SparkSession
+    spark = pyspark.sql.SparkSession.builder \
+        .appName("dev") \
+        .master("local[*]") \
+        .getOrCreate()
+    
+    # Create silver database
+    if not os.path.exists(silver_db):
+        os.makedirs(silver_db)
+    
+    process_silver_table(table_name, bronze_db, silver_db, snapshot_date_str, spark)
