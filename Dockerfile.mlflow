@@ -5,7 +5,7 @@ ENV PORT=5001
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --upgrade pip
-RUN pip install mlflow PyMySQL
+RUN pip install mlflow==2.22.1 PyMySQL
 
 VOLUME /app
 
