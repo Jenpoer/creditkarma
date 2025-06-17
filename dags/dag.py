@@ -142,6 +142,8 @@ with DAG(
     silver_financials >> gold_table
     silver_lms >> gold_table
     gold_table >> data_pipeline_completed
+
+    ####################################
+    # Model Training
+    ####################################
  
- 
-    
