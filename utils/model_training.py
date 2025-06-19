@@ -15,6 +15,7 @@ from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score, fbeta_score, confusion_matrix, ConfusionMatrixDisplay
 import numpy as np
 
@@ -122,6 +123,7 @@ def data_preprocessing(config: dict, preprocessing_pipeline: Pipeline, spark):
 ##########################
 # TRAINING
 ##########################
+# Logistic Regression
 def logistic_regression_grid_search():
     param_grid = {
         'penalty':['l1','l2','elasticnet', None],
@@ -217,7 +219,95 @@ def train_logistic_regression(param_grid, valid_combinations, X_train_arr, y_tra
 
     return return_dict
 
-def save_best_model(config, 
+# Random Forest Classifier
+def random_forest_grid_search():
+    param_grid = {
+        'n_estimators': [50, 100, 200],
+        'max_depth': [None, 5, 10, 20],
+        'min_samples_split': [2, 5],
+        'min_samples_leaf': [1, 2],
+        'max_features': ['auto', 'sqrt', 'log2']
+    }
+    return param_grid
+
+def train_random_forest(param_grid, X_train_arr, y_train_arr, X_val_arr, y_val_arr):
+    best_score = -np.inf
+    best_model = None
+    best_params = {}
+    best_signature = None
+    best_input_example = None
+
+    keys = list(param_grid.keys())
+    values = list(param_grid.values())
+
+    ########################
+    # Model Training
+    ########################
+    for combination in itertools.product(*values):
+        params = dict(zip(keys, combination))
+
+        run_name = f"rf_" + "_".join(f"{k}={v}" for k, v in params.items())
+
+        with mlflow.start_run(run_name=run_name):
+            try:
+                ####################
+                # Train Model
+                ####################
+                model = RandomForestClassifier(**params, random_state=42)
+                model.fit(X_train_arr, y_train_arr)
+
+                ####################
+                # Evaluate Metrics
+                ####################
+                y_pred_proba_train = model.predict_proba(X_train_arr)[:, 1]
+                train_auc = roc_auc_score(y_train_arr, y_pred_proba_train)
+
+                y_pred_proba_val = model.predict_proba(X_val_arr)[:, 1]
+                val_auc = roc_auc_score(y_val_arr, y_pred_proba_val)
+
+                # F1.5 Score
+                thresholds = np.arange(0.0, 1.0, 0.01)
+                beta = 1.5
+                fb_scores_train = [fbeta_score(y_train_arr, y_pred_proba_train > t, beta=beta) for t in thresholds]
+                fb_scores_val = [fbeta_score(y_val_arr, y_pred_proba_val > t, beta=beta) for t in thresholds]
+
+                train_fb_score = fb_scores_train[np.argmax(fb_scores_val)]
+                val_fb_score = fb_scores_val[np.argmax(fb_scores_val)]
+
+                ####################
+                # Log to MLFlow
+                ####################
+                for k, v in params.items():
+                    mlflow.log_param(k, v)
+
+                mlflow.log_metric("train_auc", train_auc)
+                mlflow.log_metric("val_auc", val_auc)
+                mlflow.log_metric(f"train_f{beta:.1f}_score", train_fb_score)
+                mlflow.log_metric(f"val_f{beta:.1f}_score", val_fb_score)
+
+                if val_auc > best_score:
+                    best_score = val_auc
+                    best_model = model
+                    best_params = params
+                    best_signature = infer_signature(X_val_arr, model.predict_proba(X_val_arr))
+                    best_input_example = X_val_arr[:5]
+
+            except Exception as e:
+                print(f"Skipped {params}: {e}")
+                mlflow.end_run(status="FAILED")
+                continue
+
+    return {
+        "best_score": best_score,
+        "best_model": best_model,
+        "best_params": best_params,
+        "best_signature": best_signature,
+        "best_input_example": best_input_example
+    }
+
+# Save best model
+def save_best_model(model_type,
+                    config, 
                     best_model_info_dict, 
                     pipeline,
                     X_train_arr, y_train_arr,
@@ -231,7 +321,7 @@ def save_best_model(config,
     best_signature = best_model_info_dict["best_signature"]
     best_input_example = best_model_info_dict["best_input_example"]
 
-    with mlflow.start_run(run_name="best_model"):
+    with mlflow.start_run(run_name=f"{model_type}_best_model"):
         ####################
         # Evaluate Metrics
         ####################
@@ -315,10 +405,21 @@ def save_best_model(config,
             value=config["model_train_date_str"]
         )
 
+        client.set_model_version_tag(
+            name="creditkarma-scorer",
+            version=model_info.registered_model_version,
+            key="model_type",
+            value=model_type
+        )
+
         print(f"✅ Logged and registered best model: {model_info.model_uri}")
 
+##########################
+# MAIN FUNCTIONS
+##########################
 
-def model_training_main(config: dict):
+def model_training_logreg_main(config: dict):
+    print("======== Training Logistic Regression =========")
     spark = pyspark.sql.SparkSession.builder \
     .appName("model-training") \
     .master("local[*]") \
@@ -340,7 +441,8 @@ def model_training_main(config: dict):
     # Train logistic regression model
     param_grid, valid_combinations = logistic_regression_grid_search()
     best_model_info_dict = train_logistic_regression(param_grid, valid_combinations, X_train_arr, y_train_arr, X_val_arr, y_val_arr)
-    save_best_model(config, 
+    save_best_model("logreg",
+                    config, 
                     best_model_info_dict, 
                     pipeline,
                     X_train_arr, y_train_arr,
@@ -348,3 +450,36 @@ def model_training_main(config: dict):
                     X_test_arr, y_test_arr,
                     oot_arrs)
     
+   
+
+def model_training_rf_main(config: dict):
+    print("======== Training RandomForestClassifier =========")
+    spark = pyspark.sql.SparkSession.builder \
+    .appName("model-training") \
+    .master("local[*]") \
+    .getOrCreate()
+
+    pipeline = create_data_preprocessing_pipeline()
+
+    # Preprocess data
+    X_train_arr, y_train_arr, X_val_arr, y_val_arr, X_test_arr, y_test_arr, oot_arrs = data_preprocessing(config, pipeline, spark)
+
+    print("Data preprocessing complete!")
+
+    # Connect to MLFlow
+    mlflow.set_tracking_uri(uri="http://mlflow:5001") # Set our tracking server uri for logging
+    mlflow.set_experiment(config["model_train_date_str"]) # Create a new experiment for that training date
+
+    print("Connected to MLFlow!")
+
+    # Train random forest classifier model
+    param_grid = random_forest_grid_search()
+    best_model_info_dict = train_random_forest(param_grid, X_train_arr, y_train_arr, X_val_arr, y_val_arr)
+    save_best_model("rf",
+                    config, 
+                    best_model_info_dict, 
+                    pipeline,
+                    X_train_arr, y_train_arr,
+                    X_val_arr, y_val_arr,
+                    X_test_arr, y_test_arr,
+                    oot_arrs)
