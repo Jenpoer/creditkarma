@@ -186,3 +186,4 @@ datamart/
 .trunk
 model_bank/
 mlflow.db
+mlruns/
