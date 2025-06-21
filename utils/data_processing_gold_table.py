@@ -71,29 +71,22 @@ def one_hot_encoder(df, category_col):
     df = df.drop(category_col, f"{category_col}_index", f"{category_col}_ohe", f"{category_col}_array")
     return df
 
-def build_feature_store(df_attributes, df_financials, df_loan_type, df_clickstream, df_label):
+def build_feature_store(df_attributes, df_financials, df_loan_type, df_clickstream, df_label=None):
     #############
     # Join attributes and financials into a single matrix
     #############
     df_joined = df_attributes.join(df_financials, on=["customer_id", "snapshot_date"], how="inner")
     df_joined = df_joined.join(df_loan_type, on=["customer_id", "snapshot_date"], how="inner")
     df_joined = df_joined.drop("name", "ssn", "type_of_loan", "credit_history_age", "type_of_loan") # drop identifiers and duplicated columns
-    df_joined = df_joined.join(df_label.select("customer_id"), on="customer_id", how="left_semi") # filter by user IDs that have labels
+    
+    if df_label is not None:
+        df_joined = df_joined.join(df_label.select("customer_id"), on="customer_id", how="left_semi") # filter by user IDs that have labels
 
     # Merge credit history age into one column
     df_joined = df_joined.withColumn("credit_history_age_month", F.col("credit_history_age_year") * 12 + F.col("credit_history_age_month"))
     df_joined = df_joined.drop("credit_history_age_year")
 
     print("1. Joined dataframes")
-
-    # #############
-    # # Impute mean into null numeric variables
-    # #############
-    # numeric_columns = [column for column in df_joined.columns if isinstance(df_joined.schema[column].dataType, NumericType)]
-    # imputer = Imputer(inputCols=numeric_columns, outputCols=numeric_columns)
-    # df_joined = imputer.fit(df_joined).transform(df_joined)
-
-    # print("2. Imputed mean into numeric variables")
 
     #############
     # Turn categorical variables into one hot encoded columns
