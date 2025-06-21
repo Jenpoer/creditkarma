@@ -29,8 +29,9 @@ services:
       - ./dags:/opt/airflow/dags
       - ./utils:/opt/airflow/utils
       - ./datamart:/app/datamart
+      - ./model_bank:/app/model_bank
     entrypoint: >
-      /bin/bash -c "airflow db init &&
+      /bin/bash -c "airflow db migrate &&
       airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true"
 
   airflow-webserver:
@@ -49,12 +50,13 @@ services:
       - ./dags:/opt/airflow/dags
       - ./utils:/opt/airflow/utils
       - ./datamart:/app/datamart
+      - ./model_bank:/app/model_bank
     ports:
       - "8080:8080"
     command: >
       bash -c "
-        chown -R airflow: /app/datamart &&
-        chmod -R 755 /app/datamart &&
+        chown -R airflow: /opt/airflow /app/datamart /app/model_bank &&
+        chmod -R 755 /app/datamart /app/model_bank &&
         exec su -s /bin/bash airflow -c 'airflow webserver'
       "
 
@@ -74,10 +76,11 @@ services:
       - ./dags:/opt/airflow/dags
       - ./utils:/opt/airflow/utils
       - ./datamart:/app/datamart
+      - ./model_bank:/app/model_bank
     command: >
       bash -c "
-        chown -R airflow: /app/datamart &&
-        chmod -R 755 /app/datamart &&
+        chown -R airflow: /opt/airflow /app/datamart /app/model_bank &&
+        chmod -R 755 /app/datamart /app/model_bank &&
         exec su -s /bin/bash airflow -c 'airflow scheduler'
       "
 

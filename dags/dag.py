@@ -2,11 +2,15 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.dummy import DummyOperator
 from airflow.operators.python import PythonOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.operators.python import BranchPythonOperator
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 
 from utils.data_processing_bronze_table import process_bronze_table_main
 from utils.data_processing_silver_table import process_silver_table_main
 from utils.data_processing_gold_table import process_gold_table_main
+from utils.model_training import model_training_logreg_main, model_training_rf_main
 
 default_args = {
     'owner': 'airflow',
@@ -15,8 +19,20 @@ default_args = {
     'retry_delay': timedelta(minutes=5),
 }
 
+####################################
+# Data Pipeline
+####################################
+
+def should_trigger_training(**kwargs):
+    exec_date = kwargs['execution_date']
+    # Allow triggering only if month >= 6 (June) — or after May 2023
+    if exec_date.year > 2023:
+        return 'trigger_training_dag'
+    else:
+        return 'skip_training'
+
 with DAG(
-    'dag',
+    'data_pipeline_dag',
     default_args=default_args,
     description='data pipeline run once a month',
     schedule_interval='0 0 1 * *',  # At 00:00 on day-of-month 1
@@ -24,10 +40,6 @@ with DAG(
     end_date=datetime(2024, 12, 1),
     catchup=True,
 ) as dag:
-
-    ####################################
-    # Data Pipeline
-    ####################################
 
     dep_check_source_label_data = DummyOperator(task_id="dep_check_source_label_data")
 
@@ -132,6 +144,28 @@ with DAG(
 
     data_pipeline_completed = DummyOperator(task_id="data_pipeline_completed")
 
+    trigger_training = TriggerDagRunOperator(
+        task_id='trigger_training_dag',
+        trigger_dag_id='model_training_dag',
+        conf={
+            'model_train_date_str': '{{ ds }}',
+            'train_test_period_months': 12,
+            'oot_period_months': 3,
+            'train_valtest_ratio': 0.2,
+            'val_test_ratio': 0.5
+        },
+        wait_for_completion=False
+    )
+
+    skip_training = DummyOperator(task_id='skip_training')
+
+    check_should_trigger = BranchPythonOperator(
+        task_id='check_should_trigger',
+        python_callable=should_trigger_training,
+        provide_context=True
+    )
+
+
     # Define task dependencies
     dep_check_source_label_data >> bronze_clickstream >> silver_clickstream
     dep_check_source_label_data >> bronze_attributes >> silver_attributes
@@ -143,7 +177,92 @@ with DAG(
     silver_lms >> gold_table
     gold_table >> data_pipeline_completed
 
-    ####################################
-    # Model Training
-    ####################################
- 
+    data_pipeline_completed >> check_should_trigger
+    check_should_trigger >> trigger_training
+    check_should_trigger >> skip_training
+
+####################################
+# Model Training
+####################################
+def start_model_training(model_type, **kwargs):
+    conf = kwargs['dag_run'].conf
+    model_train_date_str = conf['model_train_date_str']
+    train_test_period_months = conf['train_test_period_months']
+    oot_period_months = conf['oot_period_months']
+    train_valtest_ratio = conf['train_valtest_ratio']
+    val_test_ratio = conf['val_test_ratio']
+
+    config = {}
+    config["model_train_date_str"] = model_train_date_str
+    config["train_test_period_months"] = train_test_period_months
+    config["oot_period_months"] =  oot_period_months
+    config["model_train_date"] =  datetime.strptime(model_train_date_str, "%Y-%m-%d").date()
+    config["oot_end_date"] =  config['model_train_date'] - timedelta(days = 1)
+    config["oot_start_date"] =  config['model_train_date'] - relativedelta(months = oot_period_months)
+    config["train_test_end_date"] =  config["oot_start_date"] - timedelta(days = 1)
+    config["train_test_start_date"] =  config["oot_start_date"] - relativedelta(months = train_test_period_months)
+    config["train_valtest_ratio"] = train_valtest_ratio 
+    config["val_test_ratio"] = val_test_ratio
+    
+    if model_type == 'logreg':
+        model_training_logreg_main(config)
+    elif model_type == 'rf':
+        model_training_rf_main(config)
+
+with DAG(
+    dag_id='model_training_dag',
+    start_date=datetime(2023, 1, 1),
+    schedule_interval=None,  # Only triggered by other dag
+    catchup=False,
+    description='Train model',
+) as training_dag:
+    
+    train_model_started = DummyOperator(task_id="train_model_started")
+
+    train_logistic_regression = PythonOperator(
+        task_id='train_model_logreg',
+        python_callable=start_model_training,
+        op_kwargs={
+            'model_type': 'logreg'
+        }
+    )
+
+    train_random_forest = PythonOperator(
+        task_id='train_model_rf',
+        python_callable=start_model_training,
+        op_kwargs={
+            'model_type': 'rf'
+        }
+    )
+
+    train_model_completed = DummyOperator(task_id="train_model_completed")
+
+    train_model_started >> train_logistic_regression >> train_model_completed
+    train_model_started >> train_random_forest >> train_model_completed
+
+####################################
+# Model Inference
+####################################
+# with DAG(
+#     dag_id='batch_model_inference',
+#     start_date=datetime(2023, 1, 1),
+#     schedule_interval=None,  # Only manually triggered
+#     description='Run batch inference manually after model selection',
+# ) as inference_dag:
+
+#     start = DummyOperator(task_id='start_inference')
+
+#     # run_inference = PythonOperator(
+#     #     task_id='run_model_inference',
+#     #     python_callable=model_inference_main,
+#     #     op_kwargs={
+#     #         'model_path': '/models/best_model.pkl',
+#     #         'input_path': '/app/datamart/gold/predict_input.csv',
+#     #         'output_path': '/app/datamart/predictions/',
+#     #         'snapshot_date_str': '{{ ds }}',
+#     #     }
+#     # )
+
+#     end = DummyOperator(task_id='end_inference')
+
+#     # start >> run_inference >> end

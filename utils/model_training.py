@@ -198,8 +198,8 @@ def train_logistic_regression(param_grid, valid_combinations, X_train_arr, y_tra
                 mlflow.log_metric(f"train_f{beta:.1f}_score", train_fb_score)
                 mlflow.log_metric(f"val_f{beta:.1f}_score", val_fb_score)
 
-                if val_auc > best_score:
-                    best_score = val_auc
+                if val_fb_score > best_score:
+                    best_score = val_fb_score
                     best_model = model
                     best_params = {'C': C, 'penalty': penalty, 'solver': solver, 'max_iter': max_iter}
                     best_signature = infer_signature(X_val_arr, model.predict_proba(X_val_arr))
@@ -285,8 +285,8 @@ def train_random_forest(param_grid, X_train_arr, y_train_arr, X_val_arr, y_val_a
                 mlflow.log_metric(f"train_f{beta:.1f}_score", train_fb_score)
                 mlflow.log_metric(f"val_f{beta:.1f}_score", val_fb_score)
 
-                if val_auc > best_score:
-                    best_score = val_auc
+                if val_fb_score > best_score:
+                    best_score = val_fb_score
                     best_model = model
                     best_params = params
                     best_signature = infer_signature(X_val_arr, model.predict_proba(X_val_arr))
@@ -418,7 +418,7 @@ def save_best_model(model_type,
 # MAIN FUNCTIONS
 ##########################
 
-def model_training_logreg_main(config: dict):
+def model_training_logreg_main(config : dict):
     print("======== Training Logistic Regression =========")
     spark = pyspark.sql.SparkSession.builder \
     .appName("model-training") \
