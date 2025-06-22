@@ -263,8 +263,8 @@ def check_champion_exists():
     if not model_version:
         raise AirflowFailException(f"No champion model found for model '{MODEL_NAME}'")
     
-    print(f"Champion model found:{model_train_date}_{model_type}")
-    return f"{model_train_date}_{model_type}"
+    print(f"Champion model found:{model_type}_{model_train_date}")
+    return f"{model_type}_{model_train_date}"
 
 def run_model_inference(snapshot_date_str: str):
     snapshot_date = datetime.strptime(snapshot_date_str, "%Y-%m-%d")
