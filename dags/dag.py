@@ -4,6 +4,11 @@ from airflow.operators.dummy import DummyOperator
 from airflow.operators.python import PythonOperator
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.operators.python import BranchPythonOperator
+from airflow.exceptions import AirflowFailException
+
+import mlflow
+from mlflow.tracking import MlflowClient
+
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
@@ -11,6 +16,7 @@ from utils.data_processing_bronze_table import process_bronze_table_main
 from utils.data_processing_silver_table import process_silver_table_main
 from utils.data_processing_gold_table import process_gold_table_main
 from utils.model_training import model_training_logreg_main, model_training_rf_main
+from utils.model_inference import model_inference_main
 
 default_args = {
     'owner': 'airflow',
@@ -243,26 +249,53 @@ with DAG(
 ####################################
 # Model Inference
 ####################################
-# with DAG(
-#     dag_id='batch_model_inference',
-#     start_date=datetime(2023, 1, 1),
-#     schedule_interval=None,  # Only manually triggered
-#     description='Run batch inference manually after model selection',
-# ) as inference_dag:
 
-#     start = DummyOperator(task_id='start_inference')
+def check_champion_exists():
+    MODEL_NAME = "creditkarma-scorer"
 
-#     # run_inference = PythonOperator(
-#     #     task_id='run_model_inference',
-#     #     python_callable=model_inference_main,
-#     #     op_kwargs={
-#     #         'model_path': '/models/best_model.pkl',
-#     #         'input_path': '/app/datamart/gold/predict_input.csv',
-#     #         'output_path': '/app/datamart/predictions/',
-#     #         'snapshot_date_str': '{{ ds }}',
-#     #     }
-#     # )
+    mlflow.set_tracking_uri(uri="http://mlflow:5001")
 
-#     end = DummyOperator(task_id='end_inference')
+    client = MlflowClient()
+    model_version = client.get_model_version_by_alias(MODEL_NAME, "champion")
+    model_train_date = model_version.tags['train_date']
+    model_type = model_version.tags['model_type']
 
-#     # start >> run_inference >> end
+    if not model_version:
+        raise AirflowFailException(f"No champion model found for model '{MODEL_NAME}'")
+    
+    print(f"Champion model found:{model_train_date}_{model_type}")
+    return f"{model_train_date}_{model_type}"
+
+def run_model_inference(snapshot_date_str: str):
+    snapshot_date = datetime.strptime(snapshot_date_str, "%Y-%m-%d")
+    first_day_of_month = snapshot_date.replace(day=1)
+    first_day_str = first_day_of_month.strftime("%Y-%m-%d")
+
+    model_inference_main(snapshot_date_str=first_day_str)
+
+with DAG(
+    dag_id="inference_on_new_champion",
+    start_date=datetime(2023, 1, 1),
+    end_date=datetime(2024, 12, 31),
+    schedule_interval='0 0 7 * *',
+    catchup=True
+) as dag:
+
+    inference_started = DummyOperator(task_id="inference_started")
+
+    check_champion_model = PythonOperator(
+        task_id='check_champion_model',
+        python_callable=check_champion_exists
+    )
+
+    inference_task = PythonOperator(
+        task_id='run_model_inference',
+        python_callable=run_model_inference,
+        op_kwargs={
+            'snapshot_date_str': '{{ ds }}'
+        }
+    )
+
+    inference_completed = DummyOperator(task_id="inference_ended")
+
+    inference_started >> check_champion_model >> inference_task >> inference_completed
