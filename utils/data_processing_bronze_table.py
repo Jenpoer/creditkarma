@@ -1,6 +1,7 @@
 import os
 from datetime import datetime
 
+import pyspark
 from pyspark.sql.functions import col
 
 def process_bronze_table(table_name, source, db, snapshot_date_str, spark):
@@ -24,3 +25,17 @@ def process_bronze_table(table_name, source, db, snapshot_date_str, spark):
     df.toPandas().to_csv(filepath, index=False)
 
     return df
+
+def process_bronze_table_main(table_name, source, bronze_db, snapshot_date_str):
+    # Initialize SparkSession
+    spark = pyspark.sql.SparkSession.builder \
+        .appName("dev") \
+        .master("local[*]") \
+        .getOrCreate()
+    
+    # Create bronze database
+    if not os.path.exists(bronze_db):
+        os.makedirs(bronze_db)
+    
+    process_bronze_table(table_name, source, bronze_db, snapshot_date_str, spark)
+    

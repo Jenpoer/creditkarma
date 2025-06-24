@@ -1,4 +1,8 @@
-FROM python:3.12-slim
+# Use the official Apache Airflow image (adjust the version as needed)
+FROM apache/airflow:slim-2.11.0-python3.12
+
+# Switch to root to install additional packages
+USER root
 
 # Set non-interactive mode for apt-get
 ENV DEBIAN_FRONTEND=noninteractive
@@ -12,7 +16,6 @@ RUN apt-get update && \
     # Create expected JAVA_HOME directory and symlink the java binary there (only if missing)
     mkdir -p /usr/lib/jvm/java-17-openjdk-amd64/bin && \
     [ -f /usr/lib/jvm/java-17-openjdk-amd64/bin/java ] || ln -s "$(which java)" /usr/lib/jvm/java-17-openjdk-amd64/bin/java
-    
 
 # Set JAVA_HOME to the directory expected by Spark
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
@@ -23,20 +26,11 @@ WORKDIR /app
 
 # Copy the requirements file into the container
 COPY requirements.txt ./
+COPY data/ data/
 
-# Install Python dependencies (ensure that pyspark is in your requirements.txt,
-# or you can install it explicitly by uncommenting the next line)
+# Switch to the airflow user before installing Python dependencies
+USER airflow
+
+# Install Python dependencies using requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-# RUN pip install pyspark
-
-# Expose the default JupyterLab port
-EXPOSE 8888
-
-# Create a volume mount point for notebooks
-VOLUME /app
-
-# Enable JupyterLab via environment variable
-ENV JUPYTER_ENABLE_LAB=yes
-
-# Set up the command to run JupyterLab
-CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", "--notebook-dir=/app"]
+RUN pip install --no-cache-dir setuptools==68.2.2

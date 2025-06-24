@@ -133,14 +133,21 @@ def process_df_financials(df, silver_db, snapshot_date_str):
     df = df.withColumn("credit_history_age_month", col("credit_history_age_month").cast(IntegerType()))
 
     # Remove negative values from columns that should not have it
-    for column_name in ['num_of_loan', 'delay_from_due_date', 'num_of_delayed_payment']:
+    for column_name in ['num_bank_accounts', 
+                        'num_of_loan', 
+                        'delay_from_due_date', 
+                        'num_of_delayed_payment', 
+                        'monthly_balance',
+                        'num_credit_inquiries',
+                        'annual_income',
+                        'monthly_inhand_salary']:
         df = df.withColumn(
             column_name,
             F.when(col(column_name) >= 0, col(column_name))  # keep valid
             .otherwise(None)  # redact invalid
         ) 
     
-    # Clip outliers to 90th percentile
+    # Clip outliers to 97th percentile
     for column_name in ['num_bank_accounts', 'num_credit_card', 'interest_rate', 'num_of_loan', 'num_of_delayed_payment']:
         percentile_value = df.approxQuantile(column_name, [0.97], 0.01)[0]
         df = df.withColumn(
@@ -276,3 +283,16 @@ def process_silver_table(table_name, bronze_db, silver_db, snapshot_date_str, sp
     filepath = os.path.join(silver_db, table_name, partition_name)
     df.write.mode("overwrite").parquet(filepath)
     return df
+
+def process_silver_table_main(table_name, silver_db, bronze_db, snapshot_date_str):
+    # Initialize SparkSession
+    spark = pyspark.sql.SparkSession.builder \
+        .appName("dev") \
+        .master("local[*]") \
+        .getOrCreate()
+    
+    # Create silver database
+    if not os.path.exists(silver_db):
+        os.makedirs(silver_db)
+    
+    process_silver_table(table_name, bronze_db, silver_db, snapshot_date_str, spark)
