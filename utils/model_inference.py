@@ -84,6 +84,10 @@ def model_inference_main(snapshot_date_str: str):
     model_train_date = model_version.tags['train_date']
     model_type = model_version.tags['model_type']
 
+    # Get threshold
+    run = client.get_run(model_version.run_id) 
+    best_threshold = float(run.data.params['best_fb_threshold'])
+
     print(f"Current deployed version: {model_train_date}")
 
     # Get inference data
@@ -100,7 +104,7 @@ def model_inference_main(snapshot_date_str: str):
     df_pred_pd = df_pd.copy()[['customer_id', 'snapshot_date']]
     pred = model.predict_proba(df_arr)
     df_pred_pd['model_version'] = f'{model_type}_{model_train_date}'
-    df_pred_pd['default'] = np.argmax(pred, axis=1)
+    df_pred_pd['default'] = pred[: , 1] > best_threshold
     df_pred_pd['probability_no_default'] = pred[:, 0]
     df_pred_pd['probability_default'] = pred[:, 1]
 
